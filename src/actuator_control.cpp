@@ -1,5 +1,3 @@
-// SECTION 8 — ACTUATOR CONTROL 
-
 #include "actuator_control.h"
 #include "mqtt_manager.h"
 

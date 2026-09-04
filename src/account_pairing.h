@@ -7,9 +7,9 @@ namespace AccountPairing {
 enum class Result {
     CONNECTED,       // paired and WiFi-connected (via AP portal or BLE)
     FAILED,           // credentials submitted but connection failed
-    NOT_ATTEMPTED      // reserved for future use (e.g. portal timeout)
+    NOT_ATTEMPTED      // not implemented - reserved for future use (e.g. portal timeout)
 };
- 
+
 // Fired once pairing resolves, regardless of which transport (WiFi
 // portal or BLE) produced the result.
 using ResultCallback = void (*)(Result result, const String &connectedSsid);

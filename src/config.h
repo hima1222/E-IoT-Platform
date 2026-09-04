@@ -27,9 +27,9 @@
 #define LED_PIN_POWER   2   // red power LED
 #define LED_PIN_STATUS  4   // blue status LED
 
-#define MQTT_BROKER_HOST   "test.mosquitto.org"   // TODO: your broker
-#define MQTT_BROKER_PORT   8883
-#define MQTT_USE_TLS       1
+#define MQTT_BROKER_HOST   "test.mosquitto.org"   // TODO: broker
+#define MQTT_BROKER_PORT   1883
+#define MQTT_USE_TLS       0
 #define SENSOR_PUBLISH_INTERVAL_DEFAULT_MS 10000
 #define GPIO_ACTUATOR_PIN  26              
 
@@ -48,7 +48,7 @@
 "REPLACE_WITH_YOUR_BROKER_CA_CERT\n" \
 "-----END CERTIFICATE-----\n"
 
-// ---- Section 10 — FOTA ----
+//Section 10 — FOTA 
 #define HW_ID                   "esp32-devkit-v1"
 #define FOTA_BASE_URL           "https://your-backend.example.com"   // TODO
 #define FOTA_METADATA_PATH      "/api/firmware/latest"

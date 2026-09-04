@@ -265,8 +265,12 @@ namespace {
  
         BLEAdvertising *advertising = BLEDevice::getAdvertising();
         advertising->addServiceUUID(BLE_SERVICE_UUID);
-        advertising->start();
- 
+        advertising->setScanResponse(true);
+        advertising->setMinPreferred(0x06); // Assists iOS connection stability
+        advertising->setMinPreferred(0x12); 
+
+        BLEDevice::startAdvertising(); 
+        Serial.println("[BLE] Radio advertising successfully started!");
         bleActive = true;
     }
  
@@ -301,6 +305,7 @@ namespace {
         WiFi.begin(ssid.c_str(), pass.c_str());
         uint32_t start = millis();
         while (WiFi.status() != WL_CONNECTED && millis() - start < timeoutMs) {
+            if (portalActive) portalServer.handleClient();
             delay(250);
         }
         return WiFi.status() == WL_CONNECTED;
