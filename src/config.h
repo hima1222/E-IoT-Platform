@@ -33,13 +33,13 @@
 #define SENSOR_PUBLISH_INTERVAL_DEFAULT_MS 10000
 #define GPIO_ACTUATOR_PIN  26              
 
-// ---- Section 4 / 5 — shared provisioning button ----
+//shared provisioning button 
 #define BUTTON_PIN                 0     // TODO: your actual GPIO
 #define BUTTON_DEBOUNCE_MS         50
 #define BUTTON_LONG_PRESS_MS       3000   // held this long -> soft reset
 #define BUTTON_VERY_LONG_PRESS_MS  8000   // held this long -> hard reset
 
-// ---- Section 6 — MQTT ----
+// MQTT 
 #define MQTT_BROKER_PROTOCOL "3.1.1"
 // NOTE: must be a #define (macro), not `static const char*` — mqtt_manager.cpp
 // checks it with #if defined(...), which only works on macros.
@@ -48,7 +48,7 @@
 "REPLACE_WITH_YOUR_BROKER_CA_CERT\n" \
 "-----END CERTIFICATE-----\n"
 
-//Section 10 — FOTA 
+//FOTA 
 #define HW_ID                   "esp32-devkit-v1"
 #define FOTA_BASE_URL           "https://your-backend.example.com"   // TODO
 #define FOTA_METADATA_PATH      "/api/firmware/latest"
@@ -58,7 +58,7 @@
 #define FOTA_TASK_PRIORITY      1
 #define FOTA_TASK_CORE          1
 
-// ---- Section 11 — Edge/SmartConfig Variant (Firebase) ----
+//Edge/SmartConfig Variant (Firebase)
 #define FIREBASE_API_KEY       "your-web-api-key"    // Firebase Console → Project Settings → Web API Key
 #define FIREBASE_USER_EMAIL    "devices@yourapp.example"   // TODO — a dedicated Firebase Auth user for this device fleet
 #define FIREBASE_USER_PASSWORD "..."                         // TODO
@@ -68,6 +68,6 @@
 #define WIFI_CONNECT_TIMEOUT_MS_FALLBACK 15000
 #define FIREBASE_CONFIG_POLL_MS          (5UL * 60UL * 1000UL)
 
-// ---- Health Check Monitor ----
+//Health Check Monitor 
 #define HEALTH_CHECK_INTERVAL_MS   (60UL * 1000UL)   // how often to log heap/stack stats
 #define STACK_WARN_WORDS           256                // warn if a task's free stack drops below this (~1KB on ESP32)
