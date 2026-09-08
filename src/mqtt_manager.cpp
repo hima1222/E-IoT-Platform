@@ -60,11 +60,13 @@ bool connect(const String &clientId) {
     }
 
     if (!client.connect(clientId.c_str())) {
-        DBGLN("[MqttManager] Connect failed.");
+        DBGF("[MqttManager] Connect failed. lwmqtt error=%d, return code=%d\n",
+            (int)client.lastError(), (int)client.returnCode());
         connected = false;
         return false;
     }
 
+    DBGLN("[MqttManager] Connected successfully.");   
     connected = true;
     return true;
 }

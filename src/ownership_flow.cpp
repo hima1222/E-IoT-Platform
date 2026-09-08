@@ -219,19 +219,21 @@ void onFreshPairingConnected(const String &connectedSsid) {
 void autoConnectFromSavedConfig() {
     LedStates::setState(LedStates::State::CONNECTING_WIFI);
     WiFi.mode(WIFI_STA);
+    WiFi.setSleep(false);           
     WiFi.begin(cfgSsid.c_str(), cfgPass.c_str());
- 
+
     uint32_t start = millis();
     while (WiFi.status() != WL_CONNECTED && millis() - start < 15000) {
         delay(250);
     }
- 
+
     if (WiFi.status() != WL_CONNECTED) {
         DBGLN("[OwnershipFlow] Saved-config WiFi connect failed.");
         LedStates::setState(LedStates::State::NOT_CONNECTED);
         return;
     }
- 
+
+    delay(1000);                     
     LedStates::setState(LedStates::State::CLOUD_PENDING);
     buildTopics();
     connectMqtt();

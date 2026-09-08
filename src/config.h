@@ -19,7 +19,7 @@
                                           // when 0, FirebaseClient + its bundled TLS stack are excluded entirely
 
 #define AP_SSID        "espAP"
-#define AP_PASSWORD    "esp32"   // replace with fixed provisioning password
+#define AP_PASSWORD    "esp325908d"   // replace with fixed provisioning password
 #define AP_PORTAL_PORT 80
 
 #define BLE_DEVICE_NAME_PREFIX "SD-"       // advertised name becomes "SD-<last 4 MAC bytes>"

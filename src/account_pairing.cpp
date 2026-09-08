@@ -267,10 +267,10 @@ namespace {
         advertising->addServiceUUID(BLE_SERVICE_UUID);
         advertising->setScanResponse(true);
         advertising->setMinPreferred(0x06); // Assists iOS connection stability
-        advertising->setMinPreferred(0x12); 
+        advertising->setMaxPreferred(0x12); 
 
         BLEDevice::startAdvertising(); 
-        Serial.println("[BLE] Radio advertising successfully started!");
+        DBGLN("[BLE] Radio advertising successfully started!");
         bleActive = true;
     }
  
