@@ -57,6 +57,7 @@ inline volatile bool updatePending = false;
 inline String attributesTopic;  // "devices/<uuid>/attributes/firmware"
  
 // ---- version storage (NVS) ----
+// Reads the stored firmware version from NVS, seeding "0.0.0" on first boot.
 inline String getCurrentVersionImpl() {
     Preferences prefs;
     prefs.begin("fota", false);
@@ -71,6 +72,7 @@ inline String getCurrentVersionImpl() {
     return v;
 }
  
+// Persists the version string after a successful update.
 inline void setCurrentVersion(const String &v) {
     Preferences prefs;
     prefs.begin("fota", false);
@@ -78,6 +80,7 @@ inline void setCurrentVersion(const String &v) {
     prefs.end();
 }
  
+// Formats a raw SHA-256 digest as lowercase hex for comparison against metadata.
 inline String sha256ToHex(const uint8_t hash[32]) {
     static const char *hex = "0123456789abcdef";
     String out; out.reserve(64);
@@ -90,6 +93,7 @@ struct FirmwareMeta {
     bool hwCompatible = false, valid = false;
 };
  
+// Fetches + validates the update-metadata JSON (version/sha256/url/hw list).
 inline FirmwareMeta fetchMetadata() {
     FirmwareMeta meta;
     WiFiClientSecure client;
@@ -127,6 +131,8 @@ inline FirmwareMeta fetchMetadata() {
     return meta;
 }
  
+// Streams the binary into the inactive OTA partition while hashing it,
+// then refuses to boot it if the hash doesn't match.
 inline bool downloadFlashAndVerify(const FirmwareMeta &meta) {
     WiFiClientSecure client;
     client.setInsecure();
@@ -204,6 +210,7 @@ inline bool downloadFlashAndVerify(const FirmwareMeta &meta) {
     return true;
 }
  
+// Full update cycle: fetch metadata, compare versions, download+flash, reboot.
 inline void checkAndUpdate() {
     if (WiFi.status() != WL_CONNECTED) { DBGLN("[FOTA] no WiFi, skipping check"); return; }
  
@@ -225,6 +232,7 @@ inline void checkAndUpdate() {
 }
  
 // ---- rollback safety: pending-verify self-test/confirm ----
+// Runs once per boot on a pending-verify image: confirm valid or roll back.
 inline void runSelfTestAndConfirm() {
     const esp_partition_t *running = esp_ota_get_running_partition();
     esp_ota_img_states_t state;
@@ -272,6 +280,7 @@ inline esp_timer_handle_t drdDisarmTimer = nullptr;
  
 inline void drdDisarmCallback(void *) { g_fotaDrdFlag = 0; }
  
+// Detects a double physical reset within the DRD window; arms the flag otherwise.
 inline bool drdCheckAndArm() {
     bool doubleReset = (g_fotaDrdFlag == DRD_MAGIC);
     if (doubleReset) {
@@ -289,6 +298,7 @@ inline bool drdCheckAndArm() {
     return false;
 }
  
+// Forces boot into the other OTA partition, regardless of its verify state.
 inline void manualRollback() {
     const esp_partition_t *running = esp_ota_get_running_partition();
     const esp_partition_t *target = esp_ota_get_next_update_partition(nullptr);
@@ -297,6 +307,7 @@ inline void manualRollback() {
     if (esp_ota_set_boot_partition(target) == ESP_OK) { delay(200); esp_restart(); }
 }
  
+// One-line partition/version summary, printed at every boot.
 inline void logBootInfo() {
     const esp_partition_t *running = esp_ota_get_running_partition();
     esp_ota_img_states_t state = ESP_OTA_IMG_UNDEFINED;
@@ -309,6 +320,7 @@ inline void logBootInfo() {
 }
  
 // ---- the dedicated task (checklist: "run in separate task/thread") ----
+// The dedicated FOTA task: periodic check + processes any pending trigger.
 inline void taskFn(void *) {
     DBGF("[FOTA][Core %d] task started\n", xPortGetCoreID());
  

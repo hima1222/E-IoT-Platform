@@ -61,6 +61,7 @@ namespace EdgeSmartConfig {
 namespace {
     bool wifiReady = false;
 
+    // Blocks until the app sends credentials via SmartConfig, or times out.
     bool runSmartConfig() {
         WiFi.mode(WIFI_STA);
         WiFi.beginSmartConfig();
@@ -100,6 +101,7 @@ namespace {
     AsyncClientClass firebaseClient(firebaseSslClient);
     RealtimeDatabase Database;
 
+    // Logs auth errors only — callers gate on firebaseApp.ready(), not this.
     void firebaseAuthCallback(AsyncResult &aResult) {
         // Only logs — nothing here blocks startup; FirebaseApp::ready()
         // is what callers actually gate on.
@@ -108,6 +110,7 @@ namespace {
         }
     }
 
+    // Starts the FirebaseApp auth handshake (async — see begin() for the wait).
     void initFirebase() {
         firebaseSslClient.setInsecure();  // TODO: pin Firebase's real CA before production
 
@@ -118,6 +121,7 @@ namespace {
 
     // Blocking ("await" mode — no callback/AsyncResult passed) GET.
     // Returns "" on failure or if not yet authenticated.
+    // Blocking RTDB GET — "" on failure or if not yet authenticated.
     String firebaseGet(const String &path) {
         if (!firebaseApp.ready()) return "";
         String value = Database.get<String>(firebaseClient, path);
@@ -130,6 +134,7 @@ namespace {
     }
 
     // Blocking PUT (full overwrite at path) of a raw JSON object body.
+    // Blocking RTDB PUT (full overwrite at path).
     bool firebasePut(const String &path, const String &jsonBody) {
         if (!firebaseApp.ready()) return false;
         bool ok = Database.set<object_t>(firebaseClient, path, object_t(jsonBody));
@@ -167,6 +172,8 @@ namespace {
     // { "intervalMs": 10000,
     //   "sensors":   [ {"id":"s1","pin":34,"type":"analog"}, ... ],
     //   "actuators": [ {"id":"a1","pin":26}, ... ] }
+    // Fetches sensors/actuators from Firebase and applies pinMode() dynamically —
+    // this is what lets sensors/actuators be added/removed with no reflash.
     void pullConfig() {
         String body = firebaseGet(configPath());
         if (body.length() == 0 || body == "null") {
@@ -220,12 +227,14 @@ namespace {
     uint32_t lastTelemetryAt = 0;
     uint32_t lastConfigPullAt = 0;
 
+    // Reads a configured sensor by its declared type; unknown types get a dummy value.
     float readSensor(const SensorDef &s) {
         if (s.type == "analog") return analogRead(s.pin);
         if (s.type == "digital") return digitalRead(s.pin);
         return random(0, 10000) / 100.0;  // dummy fallback for an unrecognized type
     }
 
+    // Publishes one reading per configured sensor, keyed by its id.
     void pushTelemetry() {
         if (sensors.empty()) return;
 
@@ -238,6 +247,7 @@ namespace {
         firebasePut(telemetryPath(), out);
     }
 
+    // Reports current GPIO state for every configured actuator.
     void pushActuatorState() {
         if (actuators.empty()) return;
 
@@ -254,6 +264,7 @@ namespace {
 // ---------------------------------------------------------------
 // Part E — public API
 // ---------------------------------------------------------------
+// Pairs via SmartConfig, authenticates to Firebase, pulls initial config.
 void begin() {
     wifiReady = runSmartConfig();
     if (!wifiReady) return;
@@ -279,6 +290,7 @@ void begin() {
     lastConfigPullAt = millis();
 }
 
+// Drives Firebase auth, re-polls config, and pushes telemetry on interval.
 void loop() {
     if (!wifiReady) return;
 

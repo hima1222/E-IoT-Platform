@@ -33,6 +33,8 @@ namespace {
     String cfgDeviceQr, cfgUserName, cfgUserEmail, cfgUserMobile;
     uint32_t cfgIntervalMs = SENSOR_PUBLISH_INTERVAL_DEFAULT_MS;
     bool cfgPresent = false;
+    uint32_t lastReconnectAttempt = 0;
+    constexpr uint32_t RECONNECT_INTERVAL_MS = 5000;
  
     // Captured from the same POST /pair body Section 1 parses, so
     // that once AccountPairing reports *which* SSID connected, this
@@ -40,6 +42,7 @@ namespace {
     // Section 1's callback signature to carry it through.
     String candSsid1, candPass1, candSsid2, candPass2;
  
+    // Reads saved WiFi + ownership fields from NVS at boot.
     void loadConfig() {
         ownPrefs.begin("own_cfg", true);  // read-only open
         cfgPresent = ownPrefs.getBool("configured", false);
@@ -53,6 +56,7 @@ namespace {
         ownPrefs.end();
     }
  
+    // Persists WiFi + ownership fields after a successful fresh pairing.
     void saveConfig(const String &ssid, const String &pass) {
         ownPrefs.begin("own_cfg", false);
         ownPrefs.putBool("configured", true);
@@ -124,6 +128,7 @@ namespace {
     // brief WiFi/MQTT blip should do to physical hardware.
     bool sectionsInitialized = false;
  
+    // Builds every MQTT topic this module uses from the device UUID.
     void buildTopics() {
         String uuid = AccountPairing::getUuid();
         topicStatus      = "devices/" + uuid + "/status";
@@ -134,6 +139,7 @@ namespace {
         topicCmdAck      = "devices/" + uuid + "/cmd/ack";
     }
  
+    // Single dispatch point for every inbound MQTT message (ack, cmd, update-notice).
     void onMqttMessage(const String &topic, const String &payload) {
         if (topic == topicRegisterAck) {
             if (!cloudAckReceived) {
@@ -150,6 +156,7 @@ namespace {
         }
     }
  
+    // Connects, sends birth + registration (QoS2), subscribes to ack — the core of Section 3.
     bool connectMqtt() {
         if (!sectionsInitialized) {
             sectionsInitialized = true;
@@ -198,11 +205,13 @@ namespace {
 }  // namespace
  
 // Part D — public API
+// Call once from setup(): loads saved config, registers the pair-body listener.
 void begin() {
     loadConfig();
     AccountPairing::setPairBodyListener(onPairBody);
 }
  
+// Called by Section 1 right after a fresh pairing succeeds.
 void onFreshPairingConnected(const String &connectedSsid) {
     // Match the SSID AccountPairing reports as connected back to
     // whichever candidate (1 or 2) it came from, so we persist the
@@ -216,6 +225,7 @@ void onFreshPairingConnected(const String &connectedSsid) {
     connectMqtt();
 }
  
+// Skips the portal entirely — reconnects using flash-saved credentials.
 void autoConnectFromSavedConfig() {
     LedStates::setState(LedStates::State::CONNECTING_WIFI);
     WiFi.mode(WIFI_STA);
@@ -239,8 +249,17 @@ void autoConnectFromSavedConfig() {
     connectMqtt();
 }
  
+// Retries MQTT every RECONNECT_INTERVAL_MS while disconnected; otherwise pumps
+// the client and Section 7's telemetry loop.
 void loop() {
-    if (!mqttConnected) return;
+    if (!mqttConnected) {
+        if (WiFi.status() == WL_CONNECTED && millis() - lastReconnectAttempt >= RECONNECT_INTERVAL_MS) {
+            lastReconnectAttempt = millis();
+            DBGLN("[OwnershipFlow] Attempting MQTT reconnect...");
+            connectMqtt();
+        }
+        return;
+    }
  
     MqttManager::loop();
  
@@ -250,9 +269,7 @@ void loop() {
             cloudAckReceived = false;
             SensorData::setEnabled(false);
             LedStates::setState(LedStates::State::CLOUD_DISCONNECTED);
-            // Section 6 formalizes reconnect/backoff strategy; a bare
-            // retry here would be reasonable but is left out to avoid
-            // this module reaching ahead of its section.
+            // Reconnect is handled at the top of this function once mqttConnected goes false.
         }
         return;
     }

@@ -9,6 +9,7 @@ namespace {
     bool state = false;
 }  // namespace
 
+// Configures the GPIO and stores the ack topic. Starts OFF.
 void begin(uint8_t gpioPin, const String &topic) {
     pin = gpioPin;
     ackTopic = topic;
@@ -17,6 +18,7 @@ void begin(uint8_t gpioPin, const String &topic) {
     state = false;
 }
 
+// "1" -> HIGH, anything else -> LOW. Always acks the resulting state.
 void handleCommand(const String &payload) {
     state = (payload == "1");
     digitalWrite(pin, state ? HIGH : LOW);

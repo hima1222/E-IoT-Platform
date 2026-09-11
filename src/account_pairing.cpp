@@ -23,6 +23,7 @@ namespace {
     String modelName = "smart-device";
     String fwVersion = "0.1.0";
  
+    // Random v4-style UUID, generated once and persisted in NVS.
     String generateUuid() {
         uint8_t b[16];
         for (int i = 0; i < 16; i++) b[i] = (uint8_t)esp_random();
@@ -39,6 +40,7 @@ namespace {
  
     bool identityInitialized = false;
  
+    // Reads MAC, loads/creates UUID from NVS. Idempotent (guarded above).
     void identityBegin() {
         if (identityInitialized) return;  // safe to call from multiple places
         identityInitialized = true;
@@ -116,14 +118,17 @@ namespace {
  
     PairBodyListener pairBodyListener = nullptr;
  
+    // Small helper so every handler below doesn't repeat the content-type.
     void sendJson(int code, const String &body) {
         portalServer.send(code, "application/json", body);
     }
  
+    // GET /info — device identity for the app to confirm before pairing.
     void handleInfo() {
         sendJson(200, getRegistrationPayload());
     }
  
+    // GET /networks — returns the latest WiFi scan as JSON.
     void handleNetworks() {
         int n = WiFi.scanComplete();
         if (n == -2) {
@@ -148,6 +153,7 @@ namespace {
         sendJson(200, out);
     }
  
+    // POST /pair — validates the body, stores candidates, notifies the pair-body listener.
     void handlePair() {
         if (portalServer.method() != HTTP_POST) {
             sendJson(405, "{\"error\":\"POST required\"}");
@@ -172,15 +178,18 @@ namespace {
         sendJson(202, "{\"status\":\"connecting\"}");
     }
  
+    // GET /status — lets the app poll instead of guessing timing.
     void handleStatus() {
         String out = "{\"state\":\"" + pairState + "\",\"ssid\":\"" + pairSsid + "\"}";
         sendJson(200, out);
     }
  
+    // Catch-all for unknown routes.
     void handleNotFound() {
         sendJson(404, "{\"error\":\"not found\"}");
     }
  
+    // Brings up the SoftAP + HTTP routes.
     void wifiPortalStart() {
         WiFi.mode(WIFI_AP);
         WiFi.softAP(AP_SSID, AP_PASSWORD);
@@ -196,6 +205,7 @@ namespace {
         portalActive = true;
     }
  
+    // Tears down the SoftAP + HTTP server once pairing resolves.
     void wifiPortalStop() {
         portalServer.stop();
         WiFi.softAPdisconnect(true);
@@ -218,6 +228,7 @@ namespace {
     String blePendingSsid, blePendingPass;
     bool bleHasCandidate = false;
  
+    // Pushes a status string to the BLE status characteristic.
     void bleSetStatus(const String &s) {
         if (!bleStatusChar) return;
         bleStatusChar->setValue(s.c_str());
@@ -241,6 +252,7 @@ namespace {
     };
     CredsWriteCallback bleCredsCallback;
  
+    // Brings up the BLE GATT service (identity/creds/status characteristics).
     void blePairingStart() {
         String devName = String(BLE_DEVICE_NAME_PREFIX) + deviceMac.substring(9);
         BLEDevice::init(devName.c_str());
@@ -274,6 +286,7 @@ namespace {
         bleActive = true;
     }
  
+    // Tears down BLE advertising + deinits the stack once pairing resolves.
     void blePairingStop() {
         if (!bleActive) return;
         BLEDevice::getAdvertising()->stop();
@@ -300,6 +313,7 @@ namespace {
     ResultCallback userCallback = nullptr;
     bool resolved = false;
  
+    // Blocking WiFi.begin() + wait, used by both the portal and BLE paths.
     bool tryConnect(const String &ssid, const String &pass, uint32_t timeoutMs = 12000) {
         if (ssid.length() == 0) return false;
         WiFi.begin(ssid.c_str(), pass.c_str());
@@ -311,6 +325,7 @@ namespace {
         return WiFi.status() == WL_CONNECTED;
     }
  
+    // Whichever transport wins calls this once; tears down the other.
     void finish(Result result, const String &ssid) {
         if (resolved) return;
         resolved = true;
@@ -321,6 +336,7 @@ namespace {
         if (userCallback) userCallback(result, ssid);
     }
  
+    // Tries ssid1, falls back to ssid2 if needed.
     void resolvePortalCandidates() {
         WiFi.mode(WIFI_AP_STA);  // keep AP alive while attempting STA connect
         bool ok = tryConnect(pendingSsid1, pendingPass1);
@@ -333,6 +349,7 @@ namespace {
         finish(ok ? Result::CONNECTED : Result::FAILED, connected);
     }
  
+    // Same strongest-first logic as the portal, for the single BLE candidate.
     void resolveBleCandidate() {
         WiFi.mode(WIFI_AP_STA);
         bool ok = tryConnect(blePendingSsid, blePendingPass);
