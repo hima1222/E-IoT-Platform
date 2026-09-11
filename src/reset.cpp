@@ -4,6 +4,7 @@
 
 namespace ResetManager {
 
+// Clears WiFi creds only — user info/interval survive.
 void softReset() {
     Preferences prefs;
     prefs.begin("own_cfg", false);
@@ -17,6 +18,7 @@ void softReset() {
     ESP.restart();
 }
 
+// Wipes every key in own_cfg — full factory reset of user data.
 void hardReset() {
     Preferences prefs;
     prefs.begin("own_cfg", false);

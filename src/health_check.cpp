@@ -18,11 +18,13 @@ namespace {
 
     uint32_t lastCheckAt = 0;
 
+    // One-line heap summary.
     void logHeap() {
         DBGF("[Health] heap: free=%u  min_ever=%u  largest_block=%u\n",
              (unsigned)ESP.getFreeHeap(), (unsigned)ESP.getMinFreeHeap(), (unsigned)ESP.getMaxAllocHeap());
     }
 
+    // Stack high-water mark for one task, with an early-warning threshold.
     void logTask(const char *name, TaskHandle_t handle) {
         if (!handle) return;  // not created yet — skip quietly, try again next interval
         UBaseType_t w = uxTaskGetStackHighWaterMark(handle);
