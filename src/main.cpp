@@ -8,7 +8,11 @@
 #include "fota.h"
 #include "edge_smartconfig.h"
 #include "health_check.h"
+
+// Wires the numbered section modules together — each is called through
+// its own public API only, never reaching into another module's internals.
  
+// Section 1 result callback — hands a successful pairing off to Ownership Flow.
 void onAccountPairingResult(AccountPairing::Result result, const String &connectedSsid) {
     switch (result) {
         case AccountPairing::Result::CONNECTED:
@@ -26,6 +30,7 @@ void onAccountPairingResult(AccountPairing::Result result, const String &connect
     }
 }
  
+// Section 4 press classification -> Section 1 reopen / Section 5 reset.
 void onButtonPress(OnDemandPortal::PressType type) {
     switch (type) {
         case OnDemandPortal::PressType::SHORT:
@@ -42,6 +47,8 @@ void onButtonPress(OnDemandPortal::PressType type) {
     }
 }
  
+// Boot order matters: FOTA self-test runs first (may reboot internally before
+// anything else initializes), then health check, then the primary/variant path.
 void setup() {
     DBG_INIT(115200);
     delay(300);
@@ -51,6 +58,8 @@ void setup() {
     HealthCheck::begin();
     HealthCheck::trackTask("TaskFota", Fota::getTaskHandle());
  
+    // Primary path (Sections 1-10) and the Firebase/SmartConfig variant
+    // (Section 11) are mutually exclusive — see USE_EDGE_SMARTCONFIG_VARIANT in config.h.
     #if USE_EDGE_SMARTCONFIG_VARIANT
         AccountPairing::initIdentity();   // still want stable MAC/UUID under this variant
         EdgeSmartConfig::begin();
@@ -58,8 +67,24 @@ void setup() {
         LedStates::begin();
         AccountPairing::setModelInfo("smart-device-v1", "0.1.0");
         AccountPairing::initIdentity();
+        AccountPairing::startWebServer();  // persistent — reachable on whichever IP is active, not just during AP mode
         OwnershipFlow::begin();
         OnDemandPortal::begin(BUTTON_PIN, onButtonPress);
+
+        // Admin dashboard hooks — see account_pairing.h for why these are
+        // callbacks instead of Section 1 including fota.h/ownership_flow.h directly.
+        AccountPairing::setFotaCheckCallback([]() { Fota::handleUpdateNotice(""); });
+        AccountPairing::setFirmwareVersionCallback(Fota::getCurrentVersion);
+        AccountPairing::setExitApModeCallback([]() {
+            DBGLN("[Section 1] Admin requested exit-AP-mode — resuming normal operation.");
+            AccountPairing::cancelPortal();
+            OwnershipFlow::autoConnectFromSavedConfig();
+        });
+        AccountPairing::setEnterApModeCallback([]() {
+            DBGLN("[Section 1] Admin requested enter-AP-mode from the dashboard.");
+            AccountPairing::begin(onAccountPairingResult);
+            LedStates::setState(LedStates::State::CONFIG_PORTAL_ACTIVE);
+        });
  
         DBGLN("=== Device Identity ===");
         DBGLN("MAC:  " + AccountPairing::getMac());

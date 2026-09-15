@@ -18,11 +18,13 @@ namespace {
     WillConfig will;
     bool connected = false;
 
+    // Adapts the library's callback signature to ours, forwards to whoever called begin().
     void onRawMessage(String &topic, String &payload) {
         if (userCallback) userCallback(topic, payload);
     }
 }  // namespace
 
+// Sets up TLS or plaintext transport, wires the message callback. Call once before connect().
 void begin(const char *host, uint16_t port, bool useTls, MessageCallback onMessage) {
     usingTls = useTls;
     userCallback = onMessage;
@@ -49,11 +51,14 @@ void begin(const char *host, uint16_t port, bool useTls, MessageCallback onMessa
     DBGLN(" (256dpi/MQTT client — v3.1.1 only; see mqtt_manager.h for the v5.0 caveat).");
 }
 
+// Stores the Last Will; sent to the broker on the next connect() call.
 void setWill(const WillConfig &w) {
     will = w;
     hasWill = true;
 }
 
+// Applies the Will (if any), then connects. Logs the lwmqtt error + broker
+// return code on failure so a bad connect is diagnosable, not just "failed".
 bool connect(const String &clientId) {
     if (hasWill) {
         client.setWill(will.topic.c_str(), will.payload.c_str(), will.retained, will.qos);
@@ -83,6 +88,7 @@ void subscribe(const String &topic, uint8_t qos) {
     client.subscribe(topic, qos);
 }
 
+// Pumps the underlying client; detects a drop so isConnected() stays accurate.
 void loop() {
     client.loop();
     if (connected && !client.connected()) {

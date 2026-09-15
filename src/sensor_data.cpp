@@ -33,6 +33,7 @@ namespace {
     }
 }  // namespace
 
+// Call once topics are known — starts the interval timer.
 void begin(const String &topic, uint32_t interval) {
     telemetryTopic = topic;
     intervalMs = interval;
@@ -47,6 +48,7 @@ void setEnabled(bool e) {
     enabled = e;
 }
 
+// Publishes one dummy reading per interval, only while enabled + connected.
 void loop() {
     if (!enabled || !MqttManager::isConnected()) return;
     if (millis() - lastPublishAt < intervalMs) return;

@@ -6,6 +6,8 @@
 #include <WebServer.h>
 #include <ArduinoJson.h>
 #include <esp_system.h>
+#include <DNSServer.h>
+#include "dashboard.h"
 #if ENABLE_BLE_PAIRING
 #include <BLEDevice.h>
 #include <BLEServer.h>
@@ -23,6 +25,7 @@ namespace {
     String modelName = "smart-device";
     String fwVersion = "0.1.0";
  
+    // Random v4-style UUID, generated once and persisted in NVS.
     String generateUuid() {
         uint8_t b[16];
         for (int i = 0; i < 16; i++) b[i] = (uint8_t)esp_random();
@@ -39,6 +42,7 @@ namespace {
  
     bool identityInitialized = false;
  
+    // Reads MAC, loads/creates UUID from NVS. Idempotent (guarded above).
     void identityBegin() {
         if (identityInitialized) return;  // safe to call from multiple places
         identityInitialized = true;
@@ -115,15 +119,38 @@ namespace {
     String pairSsid = "";
  
     PairBodyListener pairBodyListener = nullptr;
- 
+
+    // Admin dashboard hooks — see account_pairing.h for why these
+    // exist instead of #including fota.h/ownership_flow.h here.
+    AdminActionCallback fotaCheckCallback = nullptr;
+    AdminActionCallback exitApModeCallback = nullptr;
+    AdminActionCallback enterApModeCallback = nullptr;
+    FirmwareVersionQuery firmwareVersionCallback = nullptr;
+
+    // Redirects every DNS lookup on the AP to our own IP — this is
+    // what makes phones/laptops auto-launch the "sign in to network"
+    // browser popup on joining the AP, instead of you having to know
+    // to type 192.168.4.1 yourself. Standard captive-portal trick.
+    DNSServer dnsServer;
+
+    // Very light "auth" — a shared query-param key, not real login.
+    // Fine for a local AP with a small trusted audience; see the
+    // honest caveat in dashboard.h before relying on this for more.
+    bool isAdminAuthorized() {
+        return portalServer.hasArg("key") && portalServer.arg("key") == ADMIN_PORTAL_KEY;
+    }
+
+    // Small helper so every handler below doesn't repeat the content-type.
     void sendJson(int code, const String &body) {
         portalServer.send(code, "application/json", body);
     }
  
+    // GET /info — device identity for the app to confirm before pairing.
     void handleInfo() {
         sendJson(200, getRegistrationPayload());
     }
  
+    // GET /networks — returns the latest WiFi scan as JSON.
     void handleNetworks() {
         int n = WiFi.scanComplete();
         if (n == -2) {
@@ -148,6 +175,7 @@ namespace {
         sendJson(200, out);
     }
  
+    // POST /pair — validates the body, stores candidates, notifies the pair-body listener.
     void handlePair() {
         if (portalServer.method() != HTTP_POST) {
             sendJson(405, "{\"error\":\"POST required\"}");
@@ -172,32 +200,159 @@ namespace {
         sendJson(202, "{\"status\":\"connecting\"}");
     }
  
+    // GET /status — lets the app poll instead of guessing timing.
     void handleStatus() {
         String out = "{\"state\":\"" + pairState + "\",\"ssid\":\"" + pairSsid + "\"}";
         sendJson(200, out);
     }
  
+    // GET / — the customer dashboard. Calls the same JSON API above.
+    void handleCustomerDashboard() {
+        portalServer.send(200, "text/html", FPSTR(customer_dashboard_html));
+    }
+
+    // GET /admin?key=... — same page plus the admin-only FOTA tool.
+    // AP-mode toggle lives on both pages now — see the two handlers
+    // below, which are deliberately NOT gated: only FOTA is admin-only,
+    // everything else is meant to be available to everyone.
+    void handleAdminDashboard() {
+        if (!isAdminAuthorized()) {
+            sendJson(403, "{\"error\":\"admin key required\"}");
+            return;
+        }
+        portalServer.send(200, "text/html", FPSTR(admin_dashboard_html));
+    }
+
+    // GET /admin/api/version — admin page's firmware-version display.
+    void handleAdminVersion() {
+        if (!isAdminAuthorized()) { sendJson(403, "{\"error\":\"admin key required\"}"); return; }
+        String v = firmwareVersionCallback ? firmwareVersionCallback() : "unknown";
+        sendJson(200, "{\"version\":\"" + v + "\"}");
+    }
+
+    // POST /admin/api/fota-check — "Check for Updates Now" button.
+    void handleAdminFotaCheck() {
+        if (!isAdminAuthorized()) { sendJson(403, "{\"error\":\"admin key required\"}"); return; }
+        if (fotaCheckCallback) fotaCheckCallback();
+        sendJson(200, "{\"status\":\"check triggered\"}");
+    }
+
+    // POST /admin/api/exit-ap-mode — closes the portal and resumes
+    // normal operation using saved config, with NO reset required.
+    // NOT admin-gated: only FOTA is admin-only, this isn't FOTA.
+    // (Path keeps the /admin/api prefix just to avoid renaming
+    // routes/JS across both dashboard pages — access isn't gated.)
+    void handleAdminExitApMode() {
+        sendJson(200, "{\"status\":\"exiting ap mode\"}");  // WebServer::send() completes synchronously — response is already out
+        if (exitApModeCallback) exitApModeCallback();
+    }
+
+    // POST /admin/api/enter-ap-mode — the dashboard button that
+    // replaces "walk over and hold the physical button." Reachable
+    // from the device's normal LAN IP (server runs persistently —
+    // see ensureServerRunning()). NOT admin-gated, same reasoning
+    // as handleAdminExitApMode() above. Mostly a no-op now that AP
+    // stays on permanently (see finish()) — useful if AP was
+    // explicitly turned off via Exit AP Mode and needs restarting.
+    void handleAdminEnterApMode() {
+        if (portalActive) { sendJson(200, "{\"status\":\"already in ap mode\"}"); return; }
+        sendJson(200, "{\"status\":\"entering ap mode\"}");
+        if (enterApModeCallback) enterApModeCallback();
+    }
+
+    // A few well-known URLs each OS probes right after joining a WiFi
+    // network to decide whether to show the captive-portal popup.
+    // Returning our page (instead of each OS's expected "no portal"
+    // response) is what triggers that popup automatically. This
+    // doesn't work identically on every OS/version — treat it as
+    // "usually auto-opens," not a guarantee.
+    void handleCaptiveProbe() {
+        portalServer.send(200, "text/html", FPSTR(customer_dashboard_html));
+    }
+
+    // Catch-all for every other unmatched request: redirect to our
+    // own page rather than a plain 404 — the second half of the
+    // captive-portal trick above (covers browsers that didn't hit
+    // one of the specific probe URLs first).
     void handleNotFound() {
-        sendJson(404, "{\"error\":\"not found\"}");
+        portalServer.sendHeader("Location", String("http://") + WiFi.softAPIP().toString() + "/", true);
+        portalServer.send(302, "text/plain", "");
     }
  
-    void wifiPortalStart() {
-        WiFi.mode(WIFI_AP);
-        WiFi.softAP(AP_SSID, AP_PASSWORD);
-        WiFi.scanNetworks(true);
- 
+    bool serverStarted = false;
+
+    // Registers every route + starts listening — exactly ONCE, ever,
+    // regardless of whether the device is in AP mode, STA mode, or
+    // both. This is what makes the dashboard reachable during normal
+    // operation (at the device's LAN IP), not just during pairing —
+    // which is what "Enter AP Mode" as a dashboard button (rather
+    // than only the physical button) actually requires: somewhere to
+    // click it FROM while already connected normally.
+    void ensureServerRunning() {
+        if (serverStarted) return;
+        serverStarted = true;
+
+        // Must happen before portalServer.begin() below: this is the
+        // FIRST WiFi-related call in the whole boot sequence now that
+        // the server starts persistently, right after initIdentity().
+        // Binding a socket before the network stack exists is exactly
+        // what causes "assert failed: tcpip_send_msg_wait_sem ...
+        // (Invalid mbox)" — WiFi.mode() is what brings that stack up.
+        // AP_STA rather than STA alone so this works regardless of
+        // which path (fresh pairing vs. saved-config) runs next.
+        WiFi.mode(WIFI_AP_STA);
+
+        portalServer.on("/", HTTP_GET, handleCustomerDashboard);
+        portalServer.on("/admin", HTTP_GET, handleAdminDashboard);
+        portalServer.on("/admin/api/version", HTTP_GET, handleAdminVersion);
+        portalServer.on("/admin/api/fota-check", HTTP_POST, handleAdminFotaCheck);
+        portalServer.on("/admin/api/exit-ap-mode", HTTP_POST, handleAdminExitApMode);
+        portalServer.on("/admin/api/enter-ap-mode", HTTP_POST, handleAdminEnterApMode);
+
         portalServer.on("/info", HTTP_GET, handleInfo);
         portalServer.on("/networks", HTTP_GET, handleNetworks);
         portalServer.on("/pair", HTTP_POST, handlePair);
         portalServer.on("/status", HTTP_GET, handleStatus);
+
+        // Captive-portal OS probe URLs — see handleCaptiveProbe()'s comment.
+        portalServer.on("/generate_204", HTTP_GET, handleCaptiveProbe);        // Android
+        portalServer.on("/gen_204", HTTP_GET, handleCaptiveProbe);              // Android (older)
+        portalServer.on("/hotspot-detect.html", HTTP_GET, handleCaptiveProbe);   // Apple
+        portalServer.on("/library/test/success.html", HTTP_GET, handleCaptiveProbe); // Apple
+        portalServer.on("/ncsi.txt", HTTP_GET, handleCaptiveProbe);              // Windows
+        portalServer.on("/connecttest.txt", HTTP_GET, handleCaptiveProbe);       // Windows
+        portalServer.on("/fwlink", HTTP_GET, handleCaptiveProbe);                 // Windows (older)
+
         portalServer.onNotFound(handleNotFound);
- 
         portalServer.begin();
+    }
+
+    // Brings up the SoftAP radio (+ BLE, elsewhere) for pairing/reconfiguring.
+    // The HTTP server itself is already running persistently — see
+    // ensureServerRunning() — this only toggles the AP radio + DNS redirect.
+    void wifiPortalStart() {
+        // WIFI_AP_STA, not WIFI_AP: this is the actual fix for "can't
+        // get back to AP mode without a reset." WIFI_AP alone forcibly
+        // drops any existing WiFi connection the instant the portal
+        // reopens, with no way back to normal operation short of a
+        // reset. AP_STA runs both radios at once, so an existing
+        // connection survives the portal being open, and "Exit AP
+        // Mode" (below) can cleanly resume it.
+        WiFi.mode(WIFI_AP_STA);
+        WiFi.softAP(AP_SSID, AP_PASSWORD);
+        WiFi.scanNetworks(true);
+
+        dnsServer.start(53, "*", WiFi.softAPIP());  // captive-portal DNS redirect
+        ensureServerRunning();  // no-op if already running (e.g. saved-config boot already started it)
         portalActive = true;
     }
  
+    // Tears down the SoftAP radio once pairing resolves. The HTTP
+    // server itself keeps running — reachable at the device's STA IP
+    // from here on, so the admin dashboard (and "Enter AP Mode") stay
+    // reachable without needing AP mode to already be active.
     void wifiPortalStop() {
-        portalServer.stop();
+        dnsServer.stop();
         WiFi.softAPdisconnect(true);
         portalActive = false;
     }
@@ -218,6 +373,7 @@ namespace {
     String blePendingSsid, blePendingPass;
     bool bleHasCandidate = false;
  
+    // Pushes a status string to the BLE status characteristic.
     void bleSetStatus(const String &s) {
         if (!bleStatusChar) return;
         bleStatusChar->setValue(s.c_str());
@@ -241,6 +397,7 @@ namespace {
     };
     CredsWriteCallback bleCredsCallback;
  
+    // Brings up the BLE GATT service (identity/creds/status characteristics).
     void blePairingStart() {
         String devName = String(BLE_DEVICE_NAME_PREFIX) + deviceMac.substring(9);
         BLEDevice::init(devName.c_str());
@@ -274,6 +431,7 @@ namespace {
         bleActive = true;
     }
  
+    // Tears down BLE advertising + deinits the stack once pairing resolves.
     void blePairingStop() {
         if (!bleActive) return;
         BLEDevice::getAdvertising()->stop();
@@ -300,6 +458,7 @@ namespace {
     ResultCallback userCallback = nullptr;
     bool resolved = false;
  
+    // Blocking WiFi.begin() + wait, used by both the portal and BLE paths.
     bool tryConnect(const String &ssid, const String &pass, uint32_t timeoutMs = 12000) {
         if (ssid.length() == 0) return false;
         WiFi.begin(ssid.c_str(), pass.c_str());
@@ -311,16 +470,20 @@ namespace {
         return WiFi.status() == WL_CONNECTED;
     }
  
+    // Whichever transport wins calls this once; tears down the other.
     void finish(Result result, const String &ssid) {
         if (resolved) return;
         resolved = true;
         pairState = (result == Result::CONNECTED) ? "connected" : "failed";
         pairSsid = ssid;
-        wifiPortalStop();
-        blePairingStop();
+        // AP + BLE deliberately KEPT RUNNING here, on both success and
+        // failure — AP and STA are meant to run concurrently at all
+        // times now, not just during pairing. The only way they stop
+        // is a deliberate "Exit AP Mode" action (cancelPortal()).
         if (userCallback) userCallback(result, ssid);
     }
  
+    // Tries ssid1, falls back to ssid2 if needed.
     void resolvePortalCandidates() {
         WiFi.mode(WIFI_AP_STA);  // keep AP alive while attempting STA connect
         bool ok = tryConnect(pendingSsid1, pendingPass1);
@@ -333,6 +496,7 @@ namespace {
         finish(ok ? Result::CONNECTED : Result::FAILED, connected);
     }
  
+    // Same strongest-first logic as the portal, for the single BLE candidate.
     void resolveBleCandidate() {
         WiFi.mode(WIFI_AP_STA);
         bool ok = tryConnect(blePendingSsid, blePendingPass);
@@ -345,6 +509,22 @@ namespace {
 void setPairBodyListener(PairBodyListener listener) {
     pairBodyListener = listener;
 }
+
+void setFotaCheckCallback(AdminActionCallback cb) {
+    fotaCheckCallback = cb;
+}
+
+void setExitApModeCallback(AdminActionCallback cb) {
+    exitApModeCallback = cb;
+}
+
+void setEnterApModeCallback(AdminActionCallback cb) {
+    enterApModeCallback = cb;
+}
+
+void setFirmwareVersionCallback(FirmwareVersionQuery cb) {
+    firmwareVersionCallback = cb;
+}
  
 void begin(ResultCallback onResult) {
     userCallback = onResult;
@@ -355,13 +535,41 @@ void begin(ResultCallback onResult) {
     wifiPortalStart();
     blePairingStart();
 }
+
+// Admin "Exit AP Mode" button: closes the portal without reporting a
+// pairing Result (nothing was submitted — this isn't a CONNECTED or
+// FAILED outcome). The caller (main.cpp, via exitApModeCallback) is
+// expected to call OwnershipFlow::autoConnectFromSavedConfig() right
+// after this, to actually resume normal operation.
+void startWebServer() {
+    ensureServerRunning();
+}
+
+void cancelPortal() {
+    wifiPortalStop();
+    blePairingStop();
+    pairState = "idle";
+    pairSsid = "";
+    resolved = true;
+}
  
 void loop() {
-    if (resolved) return;
- 
+    // Server runs persistently (see ensureServerRunning()) — always
+    // serviced, reachable at whichever IP(s) are currently active,
+    // independent of whether a pairing attempt is in progress.
+    portalServer.handleClient();
+
+    // DNS redirect must keep running for as long as AP is actually up
+    // — which is now indefinitely, not just until the first pairing
+    // attempt resolves. Checked BEFORE the resolved early-return below.
     if (portalActive) {
-        portalServer.handleClient();
-        if (portalHasCandidates) resolvePortalCandidates();
+        dnsServer.processNextRequest();
+    }
+
+    if (resolved) return;  // nothing further to resolve for this attempt
+
+    if (portalActive && portalHasCandidates) {
+        resolvePortalCandidates();
     }
     if (bleHasCandidate) {
         resolveBleCandidate();

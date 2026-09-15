@@ -49,5 +49,30 @@ void setModelInfo(const String &model, const String &fwVersion);
 // is sent.
 using PairBodyListener = void (*)(const String &rawJsonBody);
 void setPairBodyListener(PairBodyListener listener);
+
+// ---- Admin dashboard hooks ----
+// Section 1 stays decoupled from Sections 3/10 (same reasoning as
+// PairBodyListener above) — main.cpp wires these to the real
+// implementations, this module just calls them when the admin
+// dashboard's buttons are used.
+using AdminActionCallback = void (*)();
+void setFotaCheckCallback(AdminActionCallback cb);       // "Check for Updates Now"
+void setExitApModeCallback(AdminActionCallback cb);       // "Exit AP Mode / Resume Normal Operation"
+void setEnterApModeCallback(AdminActionCallback cb);       // "Enter AP Mode" — dashboard equivalent of the physical button
+
+using FirmwareVersionQuery = String (*)();
+void setFirmwareVersionCallback(FirmwareVersionQuery cb);  // admin page's firmware-version display
+
+// Call once from setup(), regardless of which boot path follows
+// (fresh pairing or saved-config auto-connect). Starts the HTTP
+// server persistently — reachable at whichever IP(s) are active from
+// then on — so the dashboard's "Enter AP Mode" button is reachable
+// during normal operation, not only while already in AP mode.
+void startWebServer();
+
+// Closes the portal/BLE WITHOUT producing a pairing Result — used by
+// the admin "Exit AP Mode" button. Distinct from a normal pairing
+// outcome (CONNECTED/FAILED), since nothing was actually submitted.
+void cancelPortal();
  
 }  // namespace AccountPairing

@@ -13,6 +13,7 @@ namespace {
     uint32_t pressStartedAt = 0;
 }  // namespace
 
+// Configures the button pin, captures its initial (unpressed) state.
 void begin(uint8_t buttonPin, PressCallback onPress) {
     pin = buttonPin;
     callback = onPress;
@@ -21,6 +22,7 @@ void begin(uint8_t buttonPin, PressCallback onPress) {
     debouncedState = lastRawState;
 }
 
+// Debounces the pin, times the hold, fires the callback once on release.
 void loop() {
     bool raw = digitalRead(pin);
 
